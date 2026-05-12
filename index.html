@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Marine Pollution Globe</title>
+  <script src="https://unpkg.com/globe.gl@2.27.2/dist/globe.gl.min.js"></script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background:#020810;
+      font-family:'Segoe UI',system-ui,sans-serif;
+      overflow:hidden;
+      color:#e0f0ff;
+    }
+    #globe-container {
+      position:fixed;
+      top:0; left:0;
+      width:100vw;
+      height:100vh;
+    }
+
+    /* ── Header ── */
+    #header {
+      position:fixed; top:0; left:0; right:0;
+      padding:16px 28px;
+      display:flex; align-items:center; gap:12px;
+      background:linear-gradient(180deg,rgba(2,8,16,.95) 0%,transparent 100%);
+      z-index:10; pointer-events:none;
+    }
+    #header h1 { font-size:1.25rem; font-weight:600; letter-spacing:.04em; color:#7dd3fc; }
+    #header p  { font-size:.75rem; color:#4a7fa0; }
+
+    /* ── Gesture badge ── */
+    #gesture-badge {
+      position:fixed; top:18px; left:50%;
+      transform:translateX(-50%);
+      padding:6px 20px; border-radius:99px;
+      background:rgba(5,20,40,.80);
+      backdrop-filter:blur(14px);
+      border:1px solid rgba(100,180,255,.2);
+      font-size:.82rem; font-weight:600; letter-spacing:.06em;
+      color:#7dd3fc; z-index:20;
+      transition:opacity .3s, color .3s;
+      white-space:nowrap;
+    }
+    #gesture-badge.idle { opacity:.3; }
+
+    /* ── Crosshair ── */
+    #crosshair {
+      position:fixed;
+      top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      pointer-events:none;
+      z-index:8;
+    }
+
+    /* ── Info card ── */
+    #info-card {
+      position:fixed; top:50%; right:32px;
+      transform:translateY(-50%);
+      width:300px;
+      background:rgba(5,20,40,.75);
+      backdrop-filter:blur(20px);
+      border:1px solid rgba(100,180,255,.18);
+      border-radius:18px;
+      padding:24px 22px;
+      z-index:10;
+      transition:opacity .35s, transform .35s;
+      box-shadow:0 8px 40px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06);
+    }
+    #info-card.hidden {
+      opacity:0; pointer-events:none;
+      transform:translateY(-50%) translateX(18px);
+    }
+    .card-top   { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; }
+    .loc-name   { font-size:1.1rem; font-weight:700; color:#e0f4ff; line-height:1.3; }
+    .loc-flag   { font-size:1.5rem; }
+    .loc-coord  { font-size:.68rem; color:#4a8aaa; margin-top:2px; font-family:'Courier New',monospace; }
+    .gauge-wrap { margin:14px 0 12px; }
+    .gauge-row  { display:flex; justify-content:space-between; font-size:.72rem; color:#7ab0cc; margin-bottom:6px; }
+    .gauge-bg   { height:9px; background:rgba(255,255,255,.07); border-radius:99px; overflow:hidden; }
+    .gauge-fill { height:100%; border-radius:99px; transition:width .6s cubic-bezier(.4,0,.2,1), background .4s; }
+    .status-pill {
+      display:inline-flex; align-items:center; gap:6px;
+      padding:4px 13px; border-radius:99px;
+      font-size:.76rem; font-weight:600;
+      border:1px solid transparent;
+      margin-bottom:14px;
+    }
+    .divider    { height:1px; background:rgba(100,180,255,.1); margin:12px 0; }
+    .sec-title  { font-size:.66rem; text-transform:uppercase; letter-spacing:.1em; color:#4a7fa0; margin-bottom:8px; }
+    .tags       { display:flex; flex-wrap:wrap; gap:6px; }
+    .tag        { background:rgba(100,180,255,.1); border:1px solid rgba(100,180,255,.2); border-radius:7px; padding:3px 10px; font-size:.70rem; color:#90c8e8; }
+    .hotspot    { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:.74rem; color:#7ab0cc; }
+    .hotspot-dot { width:7px; height:7px; border-radius:50%; background:#44aaff; flex-shrink:0; box-shadow:0 0 6px #44aaff; }
+
+    /* ── Loader ── */
+    #loader { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); display:none; z-index:30; }
+    #loader.active { display:block; }
+    .spinner {
+      width:34px; height:34px;
+      border:3px solid rgba(100,180,255,.15);
+      border-top-color:#44aaff;
+      border-radius:50%;
+      animation:rot .7s linear infinite;
+    }
+    @keyframes rot { to { transform:rotate(360deg); } }
+
+    /* ── Click flash ── */
+    #click-flash {
+      position:fixed; inset:0;
+      background:rgba(255,180,0,0.08);
+      pointer-events:none; opacity:0; z-index:7;
+      transition:opacity .15s;
+    }
+    #click-flash.active { opacity:1; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <div>
+    <h1>🌊 Marine Pollution Monitor</h1>
+    <p>Move hand to rotate · Pinch &amp; hold to sample pollution</p>
+  </div>
+</div>
+
+<!-- Gesture badge -->
+<div id="gesture-badge" class="idle">✋ IDLE</div>
+
+<!-- Crosshair -->
+<div id="crosshair">
+  <svg id="crosshair-svg" width="70" height="70" viewBox="-35 -35 70 70" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="0" cy="0" r="20" fill="none" stroke="rgba(255,255,255,0.30)" stroke-width="1.5"/>
+    <line x1="0"   y1="-24" x2="0"   y2="-28" stroke="rgba(255,255,255,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="0"   y1="24"  x2="0"   y2="28"  stroke="rgba(255,255,255,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="-24" y1="0"   x2="-28" y2="0"   stroke="rgba(255,255,255,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="24"  y1="0"   x2="28"  y2="0"   stroke="rgba(255,255,255,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="2.5" fill="rgba(255,255,255,0.85)"/>
+    <circle id="arc-circle"  cx="0" cy="0" r="20" fill="none" stroke="#ffb400" stroke-width="3" stroke-linecap="round" stroke-dasharray="0 126" transform="rotate(-90)" opacity="0"/>
+    <circle id="done-circle" cx="0" cy="0" r="20" fill="none" stroke="#00ff88" stroke-width="2.5" opacity="0"/>
+  </svg>
+</div>
+
+<!-- Globe -->
+<div id="globe-container"></div>
+
+<!-- Info card -->
+<div id="info-card" class="hidden">
+  <div class="card-top">
+    <div>
+      <div class="loc-name"  id="loc-name">—</div>
+      <div class="loc-coord" id="loc-coord"></div>
+    </div>
+    <div class="loc-flag" id="loc-flag">🌍</div>
+  </div>
+  <div class="gauge-wrap">
+    <div class="gauge-row">
+      <span>Pollution Index</span>
+      <span id="gauge-val">—</span>
+    </div>
+    <div class="gauge-bg">
+      <div class="gauge-fill" id="gauge-fill" style="width:0%"></div>
+    </div>
+  </div>
+  <div class="status-pill" id="status-pill">—</div>
+  <div class="divider"></div>
+  <div class="sec-title">Dominant Pollutants</div>
+  <div class="tags" id="tags"></div>
+  <div class="hotspot">
+    <div class="hotspot-dot"></div>
+    <span id="hotspot-txt">—</span>
+  </div>
+</div>
+
+<!-- Loader -->
+<div id="loader"><div class="spinner"></div></div>
+
+<!-- Click flash -->
+<div id="click-flash"></div>
+
+<script>
+// ── Country code → flag emoji ──────────────────────────────────────────────
+function flag(cc) {
+  if (!cc || cc.length !== 2) return '🌊';
+  return [...cc.toUpperCase()].map(c =>
+    String.fromCodePoint(0x1F1E6 - 65 + c.charCodeAt(0))
+  ).join('');
+}
+
+// ── SVG arc animation ──────────────────────────────────────────────────────
+const arcCircle  = document.getElementById('arc-circle');
+const doneCircle = document.getElementById('done-circle');
+const CIRCUMF    = 2 * Math.PI * 20;
+let arcRAF    = null;
+let arcStart  = null;
+let pinchActive = false;
+
+function startArc(durationMs, onComplete) {
+  arcCircle.style.opacity  = '1';
+  doneCircle.style.opacity = '0';
+  arcStart = null;
+  cancelAnimationFrame(arcRAF);
+  function step(ts) {
+    if (!arcStart) arcStart = ts;
+    const p = Math.min((ts - arcStart) / durationMs, 1.0);
+    arcCircle.setAttribute('stroke-dasharray', `${p * CIRCUMF} ${CIRCUMF}`);
+    if (p < 1.0) {
+      arcRAF = requestAnimationFrame(step);
+    } else {
+      doneCircle.style.opacity = '1';
+      setTimeout(() => { doneCircle.style.opacity = '0'; resetArc(); }, 400);
+      onComplete();
+    }
+  }
+  arcRAF = requestAnimationFrame(step);
+}
+
+function resetArc() {
+  cancelAnimationFrame(arcRAF);
+  arcCircle.setAttribute('stroke-dasharray', `0 ${CIRCUMF}`);
+  arcCircle.style.opacity  = '0';
+  doneCircle.style.opacity = '0';
+  arcStart = null;
+}
+
+// ── UI refs ────────────────────────────────────────────────────────────────
+const card       = document.getElementById('info-card');
+const loader     = document.getElementById('loader');
+const clickFlash = document.getElementById('click-flash');
+const badge      = document.getElementById('gesture-badge');
+
+// ── Render card ────────────────────────────────────────────────────────────
+function renderCard(d) {
+  document.getElementById('loc-name').textContent =
+    (d.city && d.city !== 'Open Ocean') ? `${d.city}, ${d.country}` : '🌊 Open Ocean';
+  document.getElementById('loc-coord').textContent =
+    `${d.lat > 0 ? d.lat + '°N' : Math.abs(d.lat) + '°S'}  ` +
+    `${d.lng > 0 ? d.lng + '°E' : Math.abs(d.lng) + '°W'}`;
+  document.getElementById('loc-flag').textContent = flag(d.country_code);
+
+  const fill = document.getElementById('gauge-fill');
+  fill.style.width      = d.pollution_index + '%';
+  fill.style.background = `linear-gradient(90deg,${d.status_color}88,${d.status_color})`;
+  document.getElementById('gauge-val').textContent = d.pollution_index + ' / 100';
+
+  const pill = document.getElementById('status-pill');
+  pill.textContent       = `${d.status_emoji}  ${d.status}`;
+  pill.style.background  = d.status_color + '22';
+  pill.style.borderColor = d.status_color + '55';
+  pill.style.color       = d.status_color;
+
+  document.getElementById('tags').innerHTML =
+    d.pollutants.map(p => `<span class="tag">${p}</span>`).join('');
+  document.getElementById('hotspot-txt').textContent =
+    'Nearest hotspot: ' + d.nearest_hotspot;
+
+  card.classList.remove('hidden');
+}
+
+function fetchPollution(lat, lng) {
+  loader.classList.add('active');
+  card.classList.add('hidden');
+  fetch('/predict', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ lat, lng })
+  })
+  .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then(d  => { loader.classList.remove('active'); renderCard(d); })
+  .catch(e => { console.error('[fetch]', e); loader.classList.remove('active'); });
+}
+
+// ── Globe init (deferred so container has real dimensions) ─────────────────
+let globe, ctrl;
+
+function initGlobe() {
+  const globeEl = document.getElementById('globe-container');
+
+  globe = Globe()
+    .globeImageUrl('https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg')
+    .bumpImageUrl('https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-topology.png')
+    .backgroundImageUrl('https://cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png')
+    .showAtmosphere(true)
+    .atmosphereColor('#1a6fff')
+    .atmosphereAltitude(0.18)
+    .width(window.innerWidth)
+    .height(window.innerHeight)
+    (globeEl);
+
+  ctrl = globe.controls();
+  ctrl.autoRotate      = true;
+  ctrl.autoRotateSpeed = 0.5;
+  ctrl.enableZoom      = true;
+  ctrl.enableDamping   = true;
+  ctrl.dampingFactor   = 0.08;
+  ctrl.target.set(0, 0, 0);
+
+  window.addEventListener('resize', () => {
+    globe.width(window.innerWidth).height(window.innerHeight);
+  });
+
+  // Mouse click on globe
+  globe.onGlobeClick(({ lat, lng }) => {
+    ctrl.autoRotate = false;
+    setTimeout(() => ctrl.autoRotate = true, 6000);
+    fetchPollution(lat, lng);
+  });
+
+  // Start WebSocket after globe is ready
+  connectWS();
+}
+
+// Defer until browser has painted the container with real dimensions
+requestAnimationFrame(() => setTimeout(initGlobe, 50));
+
+// ── Camera rotation ────────────────────────────────────────────────────────
+function rotateCamera(dx, dy) {
+  const camera = globe.camera();
+  const pos    = camera.position;
+  const r      = pos.length();
+  let theta    = Math.atan2(pos.x, pos.z);
+  let phi      = Math.acos(Math.max(-1, Math.min(1, pos.y / r)));
+  theta -= dx * 0.004;
+  phi   += dy * 0.004;
+  phi    = Math.max(0.05, Math.min(Math.PI - 0.05, phi));
+  camera.position.set(
+    r * Math.sin(phi) * Math.sin(theta),
+    r * Math.cos(phi),
+    r * Math.sin(phi) * Math.cos(theta)
+  );
+  camera.lookAt(0, 0, 0);
+  ctrl.update();
+}
+
+// ── Sample globe centre ────────────────────────────────────────────────────
+function sampleCentre() {
+  const coords = globe.toGeoCoords(window.innerWidth / 2, window.innerHeight / 2);
+  if (!coords || coords.lat === undefined) {
+    console.warn('[sampleCentre] crosshair not over globe');
+    return;
+  }
+  clickFlash.classList.add('active');
+  setTimeout(() => clickFlash.classList.remove('active'), 200);
+  fetchPollution(coords.lat, coords.lng);
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+const BADGE_LABEL = {
+  ROTATE:       '✊ ROTATING',
+  PINCH_START:  '🤏 PINCH HOLD...',
+  PINCH_CANCEL: '✋ RELEASED',
+  CLICK:        '🎯 SAMPLING',
+  IDLE:         '✋ IDLE',
+};
+const BADGE_COLOR = {
+  ROTATE:       '#00ff88',
+  PINCH_START:  '#ffb400',
+  PINCH_CANCEL: '#7dd3fc',
+  CLICK:        '#ffb400',
+  IDLE:         '#7dd3fc',
+};
+
+let idleTimer = null;
+
+function connectWS() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => console.log('[ws] connected');
+
+  ws.onmessage = ({ data }) => {
+    const cmd = JSON.parse(data);
+
+    badge.textContent = BADGE_LABEL[cmd.type] || cmd.type;
+    badge.style.color = BADGE_COLOR[cmd.type]  || '#7dd3fc';
+    badge.classList.toggle('idle', cmd.type === 'IDLE');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      badge.textContent = '✋ IDLE';
+      badge.style.color = '#7dd3fc';
+      badge.classList.add('idle');
+    }, 1800);
+
+    if (cmd.type === 'ROTATE') {
+      ctrl.autoRotate = false;
+      rotateCamera(cmd.dx, cmd.dy);
+    }
+    else if (cmd.type === 'PINCH_START') {
+      if (!pinchActive) {
+        pinchActive = true;
+        ctrl.autoRotate = false;
+        startArc(1200, () => {
+          pinchActive = false;
+          sampleCentre();
+          setTimeout(() => ctrl.autoRotate = true, 5000);
+        });
+      }
+    }
+    else if (cmd.type === 'PINCH_CANCEL') {
+      pinchActive = false;
+      resetArc();
+    }
+    else if (cmd.type === 'CLICK') {
+      resetArc();
+      pinchActive = false;
+      ctrl.autoRotate = false;
+      setTimeout(() => ctrl.autoRotate = true, 5000);
+      sampleCentre();
+    }
+    else if (cmd.type === 'IDLE') {
+      ctrl.autoRotate = true;
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('[ws] closed — reconnecting in 2s');
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = e => console.error('[ws]', e);
+}
+</script>
+</body>
+</html>
